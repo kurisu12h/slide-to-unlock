@@ -15,6 +15,7 @@
 4. **On the 14 Pro the automatic slide to unlock is still unreliable, and the bar was not met.** A multitouch trace on the phone shows the guest's driver reading every frame of every swipe; the lock screen is what fails to keep up. It trailed the finger by 2.5 to 10 seconds, ignored nearly every swipe in the first 30 seconds after it came up (on 7.1.2 it did not even draw its clock for two minutes), and went dark 7 to 10 seconds after the last Home press, leaving a swipe still being played out stuck halfway. Of the versions tried, the kept one reached the home screen on 9.3.5 after 3 swipes in one run and 5 in the next; a third variant of it never got there, and 7.1.2 did not unlock in 12 swipes (section 4).
 5. **App change (kept):** for iOS 7 to 9 each try presses Home, presses Home again 5 seconds later (which keeps the lock screen lit), and a second after that swipes across the lower middle (y = 0.7) over 1 second, keeping the finger at the end for another second before lifting; tries are 12 seconds apart. On the Mac the held swipe unlocks as before.
 6. **iOS 10 touch on the 14 Pro: confirmed.** Under autodrive the app tapped the Settings icon once (0.619, 0.735) and Settings opened.
+7. **By hand on the phone, iOS 7 and 9 looked dead because the app never showed the guest's screen going off.** The user found that no swipe did anything and the Power button did not lock. In their 7.1.2 session the guest turned its screen off about 10 seconds after the lock screen came up, but the app kept showing the last lit frame, so every later swipe went to a screen that was off, and Power woke it and put it back to sleep with nothing visible changing. The app now shows the screen dark while the guest's panel is off and drops touches that begin on it, as upstream's Mac app does; in the simulator, 7.1.2 goes dark by itself on the lock screen, Home and Power wake it, Power locks it, and a swipe by hand on the lit lock screen unlocks it (section 4.5). Installed on the 14 Pro, not yet tried there.
 
 ## 1. iOS 10 (n41) calibration
 
@@ -145,8 +146,27 @@ The kept version is 031535's: it had the best result and keeps the screen lit. 0
 The automatic slide to unlock for iOS 7 and 9 on the phone is still a known issue: 9.3.5 got there in 3 to 10 or more swipes per boot, 7.1.2 not at all. It is not the touch path (every frame reaches the guest's driver, and the same swipes unlock at once in the simulator and on the Mac) but the pace of the guest's lock screen on the phone, which lags seconds behind and ignores touches for long and irregular stretches. The app's process runs at 115 to 120% CPU (`stats.csv`) throughout the lock screen. Possible next steps, none done here:
 
 - Find where the guest's time goes on the phone while the lock screen is up (`PERF=1` logs the GL bridge, display and frame publishing times every second), since the same build is fast enough in the simulator.
-- Try unlocking by hand on the phone (not done in this round or before): a person sees the lock screen move and can hold or retry, which the app cannot.
+- Try unlocking by hand on the phone: a person sees the lock screen move and can hold or retry, which the app cannot. The user did, after these runs, and found the app hiding that the screen had gone off (section 4.5); with that fixed it has yet to be tried.
 - The two-Home-presses-per-try pattern relies on Home being harmless on a lit lock screen, which holds on iOS 7 to 9 without a passcode.
+
+### 4.5 By hand on the phone: the screen went off and the app did not show it
+
+After the runs above, the user tried by hand on the 14 Pro: on iOS 7 and 9 no swipe did anything and the Power button did not lock the screen, while iOS 10 behaved normally. Their 7.1.2 session (`20261105-045337-n78ap-11D257-jit`, copied from the phone) lasted 71 seconds before the app went to the background. Its serial log has SpringBoard's "Disabling lock screen media controls updates for screen turning off" and `AppleARMBacklight::setBacklightEnableGated 0` at guest time 0:49, about 51 seconds into the app, some 10 seconds after the lock screen came up (41 s in 033611). The guest had turned its screen off, as a real one does on an untouched lock screen, but the app kept showing the last lit frame: every swipe after that went to a screen that was off (its touch controller powered down), and Power woke the guest and put it back to sleep with no visible change.
+
+The bridge already says whether the guest's panel is off (`qemu_ios_ui_display_sleeping`: the last DCS display-off or sleep-in command for DSI panels, which include the n78 and n41, or the LCD brightness on the older iPods), and `Engine.displaySleeping` wrapped it, but nothing read it. Upstream's Mac app dims the screen and takes no input while it is set. (`stats.csv`'s backlight column is -1 on these machines; it reads another hook.)
+
+**App change:** `EmulatorViewController.tick()` reads it on every display refresh. While the guest's screen is off, the app's screen shows dark (the layer's contents are cleared, leaving the view's near-black background), and a touch that begins on it is not sent, through to its end; on wake the last frame is shown again until the guest draws. `display_sleep` and `display_wake` go into events.log.
+
+Check in the simulator (iPhone 18 Pro, 7.1.2, `20261105-170125-n78ap-11D257-jit`, no autodrive, the app's buttons and touches driven through the simulator):
+
+- On the lock screen the guest went to sleep by itself at 66.9 s (`display_sleep`) and the screen went dark.
+- Home woke it (`display_wake` at 79.2 s), and it went dark again 9.3 s later with nothing touched.
+- A quick swipe (0.6 s) about 5 s after that first wake did not move the lock screen. After the next wake, a drag across y = 0.74 at about 0.85 s with the finger held 0.6 s at the end, begun 2 s or more after the wake, unlocked to the home screen.
+- On the home screen, Power put the guest to sleep (`display_sleep` at 195.1 s, dark), and Power again woke it to the lock screen (`display_wake` at 206.3 s).
+
+9.3.5 (`20261105-170511-n78ap-13G36-jit`): the guest went to sleep by itself on the lock screen at 78.0 s, and the `home` control file woke it at 79.2 s. 10.3.4 (`20261105-170636-n41ap-14G61-jit`): its lock screen never went off by itself in 300 seconds (the clock kept ticking over each minute, and the serial log has no backlight-off line), which is why iOS 10 seemed fine by hand. In a second boot (`20261105-171231-n41ap-14G61-jit`), Power on its lock screen put it to sleep (`display_sleep` at 93.5 s, dark) and Home woke it (`display_wake` at 104.1 s), so the n41 reports its panel the same way.
+
+What this does not change: on the phone the lock screen is as slow as in section 4.1, so by hand a person still has to press Home when the screen goes dark and may need a few slow swipes in the first half minute or so; that has not been tried on the phone with this build yet.
 
 ### 4.4 Test tooling added
 
@@ -168,7 +188,7 @@ Checked in the simulator (iPhone 18 Pro, iOS 27.2) in English and in Simplified 
 ## 6. Files
 
 - `patches/a5-n78-skeleton.patch` (regenerated): `hw/arm/ipod_touch_5g.c`, the n41 and n78 sensor frames and their comments.
-- `app/ClassicTouch/EmulatorViewController.swift`: `unlock` (section 3.4); `qemuargs` read from `autostart.json` too.
+- `app/ClassicTouch/EmulatorViewController.swift`: `unlock` (section 3.4); `qemuargs` read from `autostart.json` too; the dark screen while the guest's panel is off, touches dropped on it, `display_sleep`/`display_wake` (section 4.5).
 - `app/ClassicTouch/Engine.swift`: `drag` takes `holdMilliseconds`.
 - `scripts/ios/device-boot.sh`: `GUESTPNG` and `QEMUARGS`.
 - `app/project.yml`, `app/ClassicTouch/Info.plist`, `LibraryCells.swift`, `SettingsViewController.swift`, `Localizable.xcstrings`, `ThirdPartyLicenses.txt`: the name.

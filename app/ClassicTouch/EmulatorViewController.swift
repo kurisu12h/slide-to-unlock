@@ -74,6 +74,10 @@ final class EmulatorViewController: UIViewController {
     private var guestSize = CGSize(width: 320, height: 480)
     private var lastImage: CGImage?
     private var savedSerial: UInt64 = 0
+    // The guest turned its screen off (it dims by itself, or the Power button): the screen shows dark, as a real one
+    // does, and a finger that comes down on it goes nowhere until it lifts (upstream's Mac app takes no input then either)
+    private var screenAsleep = false
+    private var touchDropped = false
 
     private var runDir: URL?
     private var stats: StatsLog?
@@ -154,7 +158,11 @@ final class EmulatorViewController: UIViewController {
             }
         }
 
-        screen.onTouch = { [weak self] phase, x, y in self?.engine?.touch(phase, x: x, y: y) }
+        screen.onTouch = { [weak self] phase, x, y in
+            guard let self else { return }
+            if phase == .begin { touchDropped = screenAsleep }
+            if !touchDropped { engine?.touch(phase, x: x, y: y) }
+        }
         boot(id: deviceID, backend: requestedBackend)
     }
 
@@ -314,7 +322,14 @@ final class EmulatorViewController: UIViewController {
     // MARK: Screen
 
     @objc private func tick() {
-        guard let engine, engine.started, let f = engine.frame(after: &serial) else { return }
+        guard let engine, engine.started else { return }
+        let asleep = engine.ready && engine.displaySleeping
+        if asleep != screenAsleep {
+            screenAsleep = asleep
+            event(asleep ? "display_sleep" : "display_wake")
+            screen.layer.contents = asleep ? nil : lastImage
+        }
+        guard let f = engine.frame(after: &serial) else { return }
         let bytesPerRow = f.width * 4
         let data = Data(bytes: f.pixels, count: bytesPerRow * f.height)
         guard let provider = CGDataProvider(data: data as CFData),
@@ -331,7 +346,7 @@ final class EmulatorViewController: UIViewController {
             guestSize = CGSize(width: f.width, height: f.height)
             view.setNeedsLayout()
         }
-        screen.layer.contents = image
+        if !asleep { screen.layer.contents = image }
     }
 
     private func everySecond() {
